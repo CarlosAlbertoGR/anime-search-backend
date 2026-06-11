@@ -9,65 +9,62 @@ app = FastAPI(title="Anime Figure Search API")
 def home():
     return {"status": "API is running. Use /buscar?query=tu_busqueda"}
 
-async def buscar_mandarake(keyword: str):
-    # Usamos la URL de búsqueda global que es más amigable para scraping
-    url = f"https://order.mandarake.co.jp/order/listPage/list?keyword={keyword}&lang=en"
+# NUEVA FUNCIÓN: API Oficial de Mercado Libre
+async def buscar_mercado_libre(keyword: str):
+    # Usamos el site 'MLM' que corresponde a Mercado Libre México
+    url = f"https://api.mercadolibre.com/sites/MLM/search?q={keyword}&category=MLM1126" # Categoría: Figuras de Acción
     
-    # CRUCIAL: Añadimos cabeceras para que Mandarake no nos bloquee o nos mande una página vacía
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9"
-    }
-    
-    async with httpx.AsyncClient(headers=headers, follow_redirects=True) as client:
+    async with httpx.AsyncClient() as client:
         try:
-            response = await client.get(url, timeout=15.0)
-            soup = BeautifulSoup(response.text, 'html.parser')
+            response = await client.get(url, timeout=10.0)
+            data = response.json()
             results = []
             
-            # Mandarake organiza sus productos en divs con la clase 'item' o dentro de un contenedor 'thumblist'
-            # Vamos a usar un selector más amplio para asegurar capturar las tarjetas de producto
-            items = soup.select('.item .detail') or soup.find_all('div', class_='thumblist')
-            
-            if not items:
-                # Intento alternativo por estructura de bloques común en Mandarake
-                items = soup.find_all('div', class_='block')
-
-            for item in items[:15]:
-                # Buscamos el título (suele estar en un h1 o un div .title)
-                title_el = item.find(['div', 'h1', 'p'], class_='title')
-                title = title_el.text.strip() if title_el else None
-                
-                # Buscamos el precio
-                price_el = item.find('p', class_='price')
-                price = price_el.text.strip() if price_el else "Consultar"
-                
-                # Buscamos el link y la imagen
-                parent = item.find_parent('div') or item
-                link_el = parent.find('a')
-                link = "https://order.mandarake.co.jp" + link_el['href'] if link_el and link_el.has_attr('href') else url
-                
-                img_el = parent.find('img')
-                image = img_el['src'] if img_el and img_el.has_attr('src') else ""
-                
-                if title:  # Solo agregamos si logramos extraer al menos el título
-                    results.append({
-                        "tienda": "Mandarake",
-                        "titulo": title,
-                        "precio": price,
-                        "imagen": image,
-                        "url": link
-                    })
-                    
+            # Recorremos los productos que nos da la API
+            for item in data.get("results", [])[:15]:
+                results.append({
+                    "tienda": "Mercado Libre",
+                    "titulo": item.get("title"),
+                    "precio": f"${item.get('price')} MXN",
+                    "imagen": item.get("thumbnail"),
+                    "url": item.get("permalink")
+                })
             return results
         except Exception as e:
-            return [{"tienda": "Mandarake", "error": str(e)}]
+            return [{"tienda": "Mercado Libre", "error": str(e)}]
+
+async def buscar_mandarake(keyword: str):
+    url = f"https://order.mandarake.co.jp/order/listPage/list?keyword={keyword}&lang=en"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    async with httpx.AsyncClient(headers=headers, follow_redirects=True) as client:
+        try:
+            response = await client.get(url, timeout=10.0)
+            soup = BeautifulSoup(response.text, 'html.parser')
+            results = []
+            items = soup.select('.item .detail') or soup.find_all('div', class_='thumblist')
+            for item in items[:10]:
+                title_el = item.find(['div', 'h1', 'p'], class_='title')
+                if title_el:
+                    results.append({
+                        "tienda": "Mandarake",
+                        "titulo": title_el.text.strip(),
+                        "precio": "Ver en web",
+                        "imagen": "",
+                        "url": url
+                    })
+            return results
+        except:
+            return []
 
 @app.get("/buscar")
 async def buscar(query: str = Query(..., min_length=2), sitios: str = ""):
-    lista_sitios = sitios.split(",") if sitios else ["mandarake"]
+    lista_sitios = sitios.split(",") if sitios else ["mercadolibre", "mandarake"]
     tareas = []
     
+    if "mercadolibre" in lista_sitios:
+        tareas.append(buscar_mercado_libre(query))
     if "mandarake" in lista_sitios:
         tareas.append(buscar_mandarake(query))
         
